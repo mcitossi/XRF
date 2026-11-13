@@ -192,3 +192,4 @@ outputs/
 
 # MCA energy calibrations of the lab detector: kept on this computer only
 calib_file/
+.streamlit/secrets.toml
