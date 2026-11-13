@@ -1,4 +1,5 @@
-# GUI per il simulatore XRF (da installare SOPRA requirements.txt del repo)
+# GUI for the XRF simulator / GUI per il simulatore XRF
+# Install on top of the repo requirements.txt / da installare SOPRA requirements.txt del repo
 streamlit>=1.50
 plotly>=5.20
 openpyxl

@@ -31,8 +31,12 @@ from scipy.interpolate import PchipInterpolator
 
 APP_DIR = Path(__file__).resolve().parent
 SRC_DIR = APP_DIR / "src"
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+
+from i18n import t                                                      # noqa: E402
 
 from xrf_model.config import load_config                                    # noqa: E402
 from xrf_model.pipeline import run_one_grid                                  # noqa: E402
@@ -108,7 +112,7 @@ def normalized(comp: dict) -> dict:
     """Frazioni in massa normalizzate a somma 1 (il file può essere in frazioni o in wt%)."""
     tot = float(sum(comp.values()))
     if tot <= 0:
-        raise ValueError("composizione con somma nulla")
+        raise ValueError(t("err_comp_sum_zero"))
     return {k: float(v) / tot for k, v in comp.items()}
 
 
@@ -129,11 +133,11 @@ def geometry_is_parametric(cfg: dict, tol: float = 1e-3) -> tuple[bool, str]:
     aim = float(n @ (-r_det / np.linalg.norm(r_det)))
     reasons = []
     if abs(cfg["src_y"]) > tol or abs(cfg["det_y"]) > tol:
-        reasons.append("tubo o rivelatore fuori dal piano x–z")
+        reasons.append(t("geo_reason_off_plane"))
     if not (cfg["src_x"] <= 0 <= cfg["det_x"]):
-        reasons.append("tubo e rivelatore non su lati opposti in x")
+        reasons.append(t("geo_reason_sides"))
     if aim < 1 - tol:
-        reasons.append(f"rivelatore non puntato sullo spot (cos = {aim:.4f})")
+        reasons.append(t("geo_reason_aim", aim=aim))
     return (not reasons), "; ".join(reasons)
 
 
@@ -193,7 +197,7 @@ def export_config(p: dict, base: dict, uA: float, live_time: float) -> tuple[str
     if p.get("custom_comp"):
         comp_dir = "compositions_gui"
         extra[f"{comp_dir}/{p['sample']}.yml"] = yaml.safe_dump(
-            {"composition": p["custom_comp"], "notes": "composizione caricata nella GUI"},
+            {"composition": p["custom_comp"], "notes": t("export_comp_notes")},
             sort_keys=False, allow_unicode=True)
     cfg = build_cfg(p, base)
     removed = [k for k in REMOVED_KEYS if k in base and k not in cfg]
@@ -213,14 +217,13 @@ def export_config(p: dict, base: dict, uA: float, live_time: float) -> tuple[str
             cfg["detector_response"]["file"] = str(Path(cfg["detector_response"]["file"]).relative_to(root))
         except ValueError:
             pass
-    head = [f"# Config esportata dalla GUI XRF il {datetime.now():%Y-%m-%d %H:%M}",
-            "# Base: configs/lab_xrf.yml — tube.current_mA e mca_live_time_s = valori della GUI.",
-            "# Rumore di Poisson e canali MCA sono calcolati dalla GUI, non dal pipeline."]
+    head = [t("export_head_date", date=f"{datetime.now():%Y-%m-%d %H:%M}"),
+            t("export_head_base"),
+            t("export_head_poisson")]
     if removed:
-        head.append("# Chiavi di lab_xrf.yml rimosse in questa config: " + ", ".join(removed)
-                    + " (file non disponibili o canali gestiti dalla GUI).")
+        head.append(t("export_head_removed", keys=", ".join(removed)))
     if comp_dir:
-        head.append(f"# Composizione caricata: {comp_dir}/{p['sample']}.yml (inclusa nello zip).")
+        head.append(t("export_head_comp", path=f"{comp_dir}/{p['sample']}.yml"))
     return "\n".join(head) + "\n" + yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True), extra
 
 
@@ -418,15 +421,15 @@ def parse_mca(raw: bytes) -> dict:
         if cur is not None and s:
             sections[cur].append(s)
     if "DATA" not in sections:
-        raise McaError("Il file non contiene la sezione <<DATA>>: non sembra un .mca PMCA/Amptek.")
+        raise McaError(t("err_mca_no_data"))
     data = []
     for s in sections["DATA"]:
         try:
             data.append(float(s.split()[0]))
         except ValueError:
-            raise McaError(f"Valore non numerico nella sezione <<DATA>>: {s[:40]!r}") from None
+            raise McaError(t("err_mca_non_numeric", val=repr(s[:40]))) from None
     if len(data) < 16:
-        raise McaError(f"La sezione <<DATA>> ha solo {len(data)} canali.")
+        raise McaError(t("err_mca_few_channels", n=len(data)))
     counts = np.asarray(data, float)
 
     header = {}
@@ -452,10 +455,10 @@ def parse_mca(raw: bytes) -> dict:
             _, A, B, Cq = rows[0]
             calib, cal_unit, cal_deg = (A * 1e-3, B * 1e-3, Cq * 1e-3), "eV", 2 if Cq else 1
         else:
-            cal_note = "sezione <<CALIBRATION>> non riconosciuta"
+            cal_note = t("cal_note_unrecognized")
         if calib is not None and not (B_RANGE_keV[0] <= calib[1] <= B_RANGE_keV[1]):
-            cal_note = (f"calibrazione scartata: B = {calib[1]*1000:.4g} eV/canale fuori dall'intervallo fisico "
-                        f"{B_RANGE_keV[0]*1000:g}–{B_RANGE_keV[1]*1000:g} eV/canale (unità dedotte: {cal_unit})")
+            cal_note = t("cal_note_bad_b", b=calib[1] * 1000, lo=B_RANGE_keV[0] * 1000,
+                         hi=B_RANGE_keV[1] * 1000, unit=cal_unit)
             calib = None
 
     dp5 = {}
@@ -579,15 +582,15 @@ def lld_table(sim, live, emin, emax, definition="3√B"):
         best_key = min(finite, key=lambda k: finite[k]["lld"]) if finite else max(cand, key=lambda k: cand[k]["N"])
         b = cand[best_key]
         w = b["row"]["Concentration"]
-        out.append({"Elemento": el, "Riga usata": best_key, "E [keV]": round(b["row"]["E"], 3),
-                    "Conc. [ppm]": w * 1e6, "FWHM [eV]": b["fwhm"] * 1e3,
-                    "N picco (finestra)": b["N"], "B fondo (finestra)": b["B"],
-                    "P/B": b["N"] / b["B"] if b["B"] > 0 else np.nan,
-                    "σ statistico [%]": 100 * math.sqrt(b["N"] + b["B"]) / b["N"] if b["N"] > 0 else np.nan,
-                    "LLD Kα [ppm]": cand.get("Kα", {}).get("lld", np.nan),
-                    "LLD Lα [ppm]": cand.get("Lα", {}).get("lld", np.nan),
-                    f"LLD {definition} [ppm] (STIMA)": b["lld"]})
-    return pd.DataFrame(out).sort_values("E [keV]")
+        out.append({t("col_element"): el, t("col_line_used"): best_key, t("col_e_kev"): round(b["row"]["E"], 3),
+                    t("col_conc_ppm"): w * 1e6, t("col_fwhm_ev"): b["fwhm"] * 1e3,
+                    t("col_n_peak"): b["N"], t("col_b_bkg"): b["B"],
+                    t("col_pb"): b["N"] / b["B"] if b["B"] > 0 else np.nan,
+                    t("col_stat_sigma"): 100 * math.sqrt(b["N"] + b["B"]) / b["N"] if b["N"] > 0 else np.nan,
+                    t("col_lld_ka"): cand.get("Kα", {}).get("lld", np.nan),
+                    t("col_lld_la"): cand.get("Lα", {}).get("lld", np.nan),
+                    t("col_lld_value", definition=definition): b["lld"]})
+    return pd.DataFrame(out).sort_values(t("col_e_kev"))
 
 
 def scattering_angle_deg(cfg: dict) -> float:

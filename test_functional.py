@@ -3,7 +3,8 @@
 Uso (dalla root del repo, con app.py e xrf_gui_core.py accanto a src/):
     python test_functional.py
 Importa le funzioni di calcolo da xrf_gui_core e le confronta con run_one_grid.
-Con streamlit installato verifica anche l'app (AppTest) e l'accesso con password.
+Con streamlit installato verifica anche l'app (AppTest), l'accesso con password
+e il cambio lingua IT/EN.
 """
 from __future__ import annotations
 
@@ -20,8 +21,13 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 logging.disable(logging.WARNING)
 
+import ast                              # noqa: E402
+import re                               # noqa: E402
 import numpy as np                      # noqa: E402
+import i18n                             # noqa: E402
 import xrf_gui_core as core             # noqa: E402
+
+i18n.set_lang("it")
 
 FAILS = []
 
@@ -31,6 +37,12 @@ def check(name, cond, detail=""):
     if not cond:
         FAILS.append(name)
 
+
+# 0. i18n: ogni chiave ha it e en, stessi placeholder ──────────────────────
+probs = i18n.translation_problems()
+check("i18n: ogni chiave ha it e en (placeholder allineati)", not probs,
+      f"{len(probs)} problemi" + (": " + "; ".join(probs[:8]) if probs else ""))
+check("i18n: dizionario non vuoto", len(i18n.STRINGS) >= 200, f"{len(i18n.STRINGS)} chiavi")
 
 cfg0 = core.base_config()
 g = core.geometry_defaults(cfg0)
@@ -176,11 +188,11 @@ except ImportError:
 if AppTest is not None:
     app = str(HERE / "app.py")
     os.environ.pop("XRF_APP_PASSWORD", None)
-    at = AppTest.from_file(app, default_timeout=300).run()
+    at = AppTest.from_file(str(HERE / "app.py"), default_timeout=300).run()
     check("app senza password: parte e simula", not at.exception and len(at.metric) == 6,
           f"eccezioni {len(at.exception)}, metriche {len(at.metric)}")
     os.environ["XRF_APP_PASSWORD"] = "segreta-di-prova"
-    at = AppTest.from_file(app, default_timeout=300).run()
+    at = AppTest.from_file(str(HERE / "app.py"), default_timeout=300).run()
     blocked = len(at.metric) == 0 and len(at.text_input) == 1
     at.text_input[0].input("sbagliata")
     at.get("form_submit_button")[0].click()
@@ -193,6 +205,101 @@ if AppTest is not None:
     check("password: blocca senza, rifiuta la sbagliata, entra con quella giusta", blocked and still and passed,
           f"bloccata {blocked}, rifiutata {still}, entrata {passed}")
     os.environ.pop("XRF_APP_PASSWORD", None)
+
+# 10. testi core in inglese e assenza di italiano hardcodato in app.py ──────
+i18n.set_lang("en")
+_, reason_en = core.geometry_is_parametric(dict(cfg0, det_y=1.0))
+check("geometria: motivo in inglese", "off the x–z plane" in reason_en, reason_en)
+m_bad_en = core.parse_mca(mk("<<CALIBRATION>>\nLABEL - keV\n100 60\n1000 6000\n"))
+check("calibrazione scartata: nota in inglese",
+      m_bad_en["calib"] is None and "outside" in m_bad_en["cal_note"], m_bad_en["cal_note"])
+try:
+    core.parse_mca(b"1\n2\n3\n")
+    check("file senza <<DATA>> (en) → errore", False)
+except core.McaError as exc:
+    check("file senza <<DATA>> (en) → messaggio inglese",
+          "<<DATA>>" in str(exc) and "does not look like" in str(exc), str(exc))
+te = core.lld_table(sim, 300.0, 1.0, 50.0).set_index("Element")
+check("LLD: intestazioni inglesi",
+      "LLD 3√B [ppm] (ESTIMATE)" in te.columns and "Line used" in te.columns,
+      ", ".join(te.columns))
+cfg_en, _ = core.export_config(P, cfg0, 2.0, 300.0)
+check("export config: commenti in inglese", "exported from the XRF GUI" in cfg_en
+      and "Poisson noise and MCA channels" in cfg_en)
+i18n.set_lang("it")
+
+ALLOWED_LITERALS = {
+    "fisso", "casuale", "conteggi/canale", "ph/s/keV",
+    "fluorescenza", "coerente", "incoerente",
+    "parametrica", "collimatore", "manuale",
+    "nessuno", "nessuna", "live time", "su un picco",
+    "Italiano", "English", "it", "en",
+}
+ITALIAN_UI = re.compile(
+    r"\b(Simula|Conteggi|Atmosfera|Campione|Rivelatore|Parametri|Acquisizione|"
+    r"Etichette|Fluorescenza|illuminata|Composizione|Tensione|"
+    r"Entra|Esci|errata|Normalizzazione|misurato|simulato|"
+    r"Note fisiche|Aggiungi al confronto|Nuova realizzazione|"
+    r"limite di rivelabilità|Area illuminata|Filtro aggiuntivo|"
+    r"Password errata|Interfaccia per)\b",
+    re.I,
+)
+app_src = (HERE / "app.py").read_text(encoding="utf-8")
+tree = ast.parse(app_src)
+hits = []
+doc_node = None
+if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.Constant):
+    doc_node = tree.body[0].value
+
+class _Lit(ast.NodeVisitor):
+    def visit_Constant(self, node):
+        if not isinstance(node.value, str):
+            return
+        s = node.value
+        if node is doc_node or s in ALLOWED_LITERALS:
+            return
+        if ITALIAN_UI.search(s):
+            hits.append(f"L{node.lineno}: {s[:80]!r}")
+
+_Lit().visit(tree)
+check("app.py: nessun testo UI italiano fuori da i18n", not hits,
+      "; ".join(hits[:6]))
+
+# 11. AppTest: render in entrambe le lingue ────────────────────────────────
+if AppTest is not None:
+    def _app_text(at_):
+        parts = []
+        for attr in ("markdown", "title", "header", "subheader", "caption",
+                     "error", "warning", "info", "success", "text"):
+            for el in getattr(at_, attr, []):
+                parts.append(str(getattr(el, "value", "") or ""))
+        for attr in ("slider", "radio", "selectbox", "number_input", "toggle",
+                     "button", "text_input", "multiselect", "select_slider",
+                     "checkbox", "form_submit_button", "download_button", "tabs"):
+            for el in getattr(at_, attr, []):
+                lab = getattr(el, "label", None) or getattr(el, "value", None)
+                if lab:
+                    parts.append(str(lab))
+        return "\n".join(parts)
+
+    os.environ.pop("XRF_APP_PASSWORD", None)
+    at = AppTest.from_file(str(HERE / "app.py"), default_timeout=300).run()
+    txt_it = _app_text(at)
+    ok_it = (not at.exception and "### ⚙️ Parametri" in txt_it and "Corrente [µA]" in txt_it
+             and "Tube current" not in txt_it and "### ⚙️ Parameters" not in txt_it)
+    lang_radios = [r for r in at.radio if getattr(r, "key", None) == "lang"]
+    if lang_radios:
+        lang_radios[0].set_value("en")
+        at.run()
+    txt_en = _app_text(at)
+    ok_en = (not at.exception and len(at.metric) == 6
+             and "Tube current" in txt_en and "### ⚙️ Parameters" in txt_en
+             and "▶ Simulate" in txt_en
+             and "### ⚙️ Parametri" not in txt_en and "Corrente [µA]" not in txt_en)
+    check("app: render IT e EN senza eccezioni, testi scambiati",
+          ok_it and ok_en and bool(lang_radios),
+          f"radio lingua {bool(lang_radios)}, IT ok {ok_it}, EN ok {ok_en}; "
+          f"eccezioni EN {at.exception}")
 
 print("TUTTO OK" if not FAILS else f"FALLITI: {FAILS}")
 sys.exit(0 if not FAILS else 1)

@@ -6,6 +6,7 @@ GUI per il simulatore a parametri fondamentali (pacchetto `xrf_model` in ./src).
 Il pacchetto non viene modificato: la config è costruita in memoria partendo da
 configs/lab_xrf.yml e `run_one_grid` è chiamato così com'è. Le funzioni di
 calcolo stanno in xrf_gui_core.py (importabili e testabili senza Streamlit).
+I testi visibili all'utente sono in i18n.py (Italiano / English).
 
 Avvio:  streamlit run app.py   (dalla cartella del repo, accanto a src/ e configs/)
 """
@@ -27,14 +28,35 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from i18n import LANG_LABELS, set_lang, t
+
 st.set_page_config(page_title="XRF sim", page_icon="🌙", layout="wide", initial_sidebar_state="expanded")
+
+
+def init_language() -> None:
+    if "lang" not in st.session_state:
+        st.session_state["lang"] = "it"
+    set_lang(st.session_state["lang"])
+
+
+def language_selector(container) -> None:
+    container.radio(
+        t("language"),
+        options=["it", "en"],
+        format_func=lambda x: LANG_LABELS[x],
+        horizontal=True,
+        key="lang",
+    )
+    set_lang(st.session_state["lang"])
+
+
+init_language()
 
 try:
     import xrf_gui_core as core
 except Exception as exc:   # pragma: no cover
-    st.error("Non trovo `xrf_gui_core.py` o il pacchetto `xrf_model`. Metti `app.py` e `xrf_gui_core.py` "
-             "nella cartella del repo (accanto a `src/` e `configs/`) e attiva il venv del repo.\n\n"
-             f"Errore: {exc}")
+    language_selector(st)
+    st.error(t("err_import", exc=exc))
     st.stop()
 
 
@@ -51,16 +73,17 @@ def expected_password() -> str | None:
 
 _PW = expected_password()
 if _PW and not st.session_state.get("auth_ok"):
-    st.markdown("## 🔒 XRF sim")
+    language_selector(st)
+    st.markdown(t("login_title"))
     with st.form("login"):
-        entered = st.text_input("Password", type="password")
-        ok = st.form_submit_button("Entra", type="primary")
+        entered = st.text_input(t("password"), type="password")
+        ok = st.form_submit_button(t("btn_enter"), type="primary")
     if ok:
         if core.check_password(entered, _PW):
             st.session_state["auth_ok"] = True
             st.rerun()
         else:
-            st.error("Password errata.")
+            st.error(t("err_bad_password"))
     st.stop()
 
 C = dict(total="#2DD4BF", fluo="#F472B6", coh="#60A5FA", inc="#FBBF24", meas="#FB923C",
@@ -114,12 +137,20 @@ def compact(x, unit=""):
     return f"{x:.0f} {unit}".strip()
 
 
+def atm_label(a: str) -> str:
+    return t("atm_air") if a == "air" else t("atm_vacuum")
+
+
+def filter_label(m: str) -> str:
+    return t("filter_none") if m == "nessuno" else m
+
+
 cfg0 = base_config(core.file_stamp(core.CONFIG_PATH))
 status = core.local_files_status(cfg0)
 gdef = core.geometry_defaults(cfg0)
 geo_param_ok, geo_reason = core.geometry_is_parametric(cfg0)
 samples = core.list_samples(cfg0)
-cfg_filters = {str(m): float(t) for m, t in (cfg0["tube"].get("filters") or {}).items()}
+cfg_filters = {str(m): float(th) for m, th in (cfg0["tube"].get("filters") or {}).items()}
 cfg_si = float(cfg0.get("si_active_layer_um", 450.0))
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -128,125 +159,115 @@ cfg_si = float(cfg0.get("si_active_layer_um", 450.0))
 st.markdown(f"""
 <div class="hero">
   <h1>🌙 XRF sim</h1>
-  <p>Interfaccia per il codice a parametri fondamentali <code>xrf_model</code> (v3) —
-  Mini-X2 Ag + X-123 FAST-SDD, INAF Trieste</p>
-  <span class="badge">Sherman + secondaria K</span><span class="badge">righe L + Coster–Kronig</span>
-  <span class="badge">Rayleigh f0+f′</span><span class="badge">Compton KN×S + Doppler</span>
-  <span class="badge">tubo SpekPy</span>
-  <span class="badge {'ok' if status['response'] else 'warn'}">matrice Geant4: {'presente' if status['response'] else 'assente → picchi gaussiani'}</span>
-  <span class="badge {'ok' if status['calibration'] else 'warn'}">calibrazione MCA: {'presente' if status['calibration'] else 'assente'}</span>
+  <p>{t("hero_subtitle")}</p>
+  <span class="badge">{t("badge_sherman")}</span><span class="badge">{t("badge_l_lines")}</span>
+  <span class="badge">{t("badge_rayleigh")}</span><span class="badge">{t("badge_compton")}</span>
+  <span class="badge">{t("badge_spekpy")}</span>
+  <span class="badge {'ok' if status['response'] else 'warn'}">{t("badge_geant4_ok") if status['response'] else t("badge_geant4_missing")}</span>
+  <span class="badge {'ok' if status['calibration'] else 'warn'}">{t("badge_mca_ok") if status['calibration'] else t("badge_mca_missing")}</span>
 </div>
 """, unsafe_allow_html=True)
 
 if (status["response_declared"] and not status["response"]) or (status["calibration_declared"] and not status["calibration"]):
-    st.info("ℹ️ `lab_xrf.yml` dichiara la matrice di risposta Geant4 (`detector_response`) e/o la "
-            "calibrazione MCA (`mca_calibration`, `mca_channels`), ma i file non sono su questo computer. "
-            "Sono stati tolti dalla config in memoria: i picchi sono gaussiani (Fano + rumore) e i canali sono "
-            "quelli della griglia di simulazione (30 eV), oppure quelli dello spettro misurato caricato. "
-            "Il file `lab_xrf.yml` non viene toccato.")
+    st.info(t("info_missing_files"))
 
 # ────────────────────────────────────────────────────────────────────────────
-# Sidebar: parametri fisici (form) + acquisizione
+# Sidebar: lingua, parametri fisici (form) + acquisizione
 # ────────────────────────────────────────────────────────────────────────────
 sb = st.sidebar
+language_selector(sb)
 if _PW:
-    if sb.button("Esci", icon="🔒"):
+    if sb.button(t("btn_sign_out"), icon="🔒"):
         st.session_state["auth_ok"] = False
         st.rerun()
 else:
-    sb.caption("Accesso senza password (uso locale). Per proteggerla: `app_password` in "
-               "`.streamlit/secrets.toml` o variabile `XRF_APP_PASSWORD`.")
-sb.markdown("### ⚙️ Parametri")
+    sb.caption(t("caption_no_password"))
+sb.markdown(t("sidebar_params"))
 
 with sb.form("phys"):
-    st.markdown("**Campione**")
+    st.markdown(t("section_sample"))
     default_sample = cfg0["samples"][0] if cfg0["samples"][0] in samples else samples[0]
-    sample = st.selectbox("Composizione (data/compositions)", samples, index=samples.index(default_sample))
-    custom_file = st.file_uploader("…oppure carica un .yml (`composition:` → frazioni o wt%)",
-                                   type=["yml", "yaml"], key="custom_yml")
-    secondary = st.toggle("Fluorescenza secondaria K", value=bool(cfg0.get("include_secondary", True)))
+    sample = st.selectbox(t("label_composition"), samples, index=samples.index(default_sample))
+    custom_file = st.file_uploader(t("label_upload_yml"), type=["yml", "yaml"], key="custom_yml")
+    secondary = st.toggle(t("toggle_secondary"), value=bool(cfg0.get("include_secondary", True)))
 
-    st.markdown("**Tubo Mini-X2**")
+    st.markdown(t("section_tube"))
     c1, c2 = st.columns(2)
-    kv = c1.slider("Tensione [kV]", 10, 50, int(cfg0["tube"]["kvp"]))
-    uA = c2.slider("Corrente [µA]", 5, 200, 50, step=5)
-    target_um = st.number_input("Spessore target Ag [µm]", 0.3, 3.0,
+    kv = c1.slider(t("label_voltage"), 10, 50, int(cfg0["tube"]["kvp"]))
+    uA = c2.slider(t("label_current"), 5, 200, 50, step=5)
+    target_um = st.number_input(t("label_target"), 0.3, 3.0,
                                 float(cfg0["tube"]["transmission_thickness_um"]), 0.05,
-                                help="lab_xrf.yml: 1.0 µm. Scheda/manuale Amptek Mini-X2: 0.75 ± 0.1 µm. "
-                                     "Con 0.75 µm le righe calano del ~21–25 %.")
+                                help=t("help_target"))
     keep_filters = st.multiselect(
-        "Filtri del config (tube.filters) da mantenere", list(cfg_filters), default=list(cfg_filters),
+        t("label_keep_filters"), list(cfg_filters), default=list(cfg_filters),
         format_func=lambda m: f"{m} {cfg_filters[m]:g} mm",
-        help="Il Be è la finestra d'uscita del tubo: toglierlo non è fisico, ma resta possibile.")
+        help=t("help_keep_filters"))
     c1, c2 = st.columns(2)
-    filter_mat = c1.selectbox("Filtro aggiuntivo", core.FILTER_MATERIALS, index=0,
-                              help="Aggiunto ai filtri del config (stesso materiale: spessori sommati).")
-    filter_mm = c2.number_input("Spessore [mm]", 0.0, 2.0, 0.0, 0.005, format="%.3f")
+    filter_mat = c1.selectbox(t("label_extra_filter"), core.FILTER_MATERIALS, index=0,
+                              format_func=filter_label,
+                              help=t("help_extra_filter"))
+    filter_mm = c2.number_input(t("label_thickness"), 0.0, 2.0, 0.0, 0.005, format="%.3f")
 
-    st.markdown("**Ambiente e griglia**")
-    atmosphere = st.radio("Atmosfera", ["air", "vacuum"], horizontal=True,
+    st.markdown(t("section_env"))
+    atmosphere = st.radio(t("label_atmosphere"), ["air", "vacuum"], horizontal=True,
                           index=0 if cfg0.get("atmosphere", "vacuum") == "air" else 1,
-                          format_func=lambda a: "aria" if a == "air" else "vuoto")
-    grid_n = st.select_slider("Griglia n × n", options=[1, 2, 3, 4, 5, 6, 8, 10, 15, 20],
+                          format_func=atm_label)
+    grid_n = st.select_slider(t("label_grid"), options=[1, 2, 3, 4, 5, 6, 8, 10, 15, 20],
                               value=int(cfg0["grid_n_x"]))
-    grid_mode = st.radio("Area illuminata", ["config", "collimatore", "manuale"], horizontal=True,
-                         format_func={"config": "da config", "collimatore": "da collimatore",
-                                      "manuale": "manuale"}.get,
-                         help="Il codice non ha un modello di footprint: la griglia È l'area illuminata.")
-    beam_D_mm = st.number_input("Diametro fascio sul campione D [mm] (modo collimatore)", 0.5, 20.0, 2.0, 0.1,
-                                help="Da lab_xrf.yml: per un foro di diametro d e lunghezza L con uscita a distanza g "
-                                     "dallo spot, D sta fra d e d·(1 + g/L). 2 mm = limite inferiore (foro del collimatore).")
+    grid_mode = st.radio(t("label_illuminated_area"), ["config", "collimatore", "manuale"], horizontal=True,
+                         format_func=lambda m: {"config": t("area_config"), "collimatore": t("area_collimator"),
+                                                "manuale": t("area_manual")}[m],
+                         help=t("help_illuminated_area"))
+    beam_D_mm = st.number_input(t("label_beam_d"), 0.5, 20.0, 2.0, 0.1, help=t("help_beam_d"))
     c1, c2 = st.columns(2)
-    hx_man = c1.number_input("½ lato x [cm] (manuale)", 0.01, 3.0, float(cfg0["grid_x_max"]), 0.01)
-    hy_man = c2.number_input("½ lato y [cm] (manuale)", 0.01, 3.0, float(cfg0["grid_y_max"]), 0.01)
+    hx_man = c1.number_input(t("label_hx"), 0.01, 3.0, float(cfg0["grid_x_max"]), 0.01)
+    hy_man = c2.number_input(t("label_hy"), 0.01, 3.0, float(cfg0["grid_y_max"]), 0.01)
 
-    with st.expander("📐 Geometria", expanded=not geo_param_ok):
-        geo_mode = st.radio("Modalità", ["config", "parametrica"], horizontal=True,
+    with st.expander(t("exp_geometry"), expanded=not geo_param_ok):
+        geo_mode = st.radio(t("label_geo_mode"), ["config", "parametrica"], horizontal=True,
                             index=1 if geo_param_ok else 0,
-                            format_func={"config": "usa geometria del config", "parametrica": "parametrica θ/D"}.get)
+                            format_func=lambda m: {"config": t("geo_config"), "parametrica": t("geo_parametric")}[m])
         if not geo_param_ok:
-            st.warning(f"La geometria di lab_xrf.yml non è descrivibile con θ/D ({geo_reason}). "
-                       "In modalità parametrica verrebbe sostituita.")
+            st.warning(t("warn_geo_not_parametric", reason=geo_reason))
         c1, c2 = st.columns(2)
-        theta_src = c1.number_input("θ tubo dalla normale [°]", 0.0, 85.0, round(gdef["theta_src"], 2), 0.5)
-        D_src = c2.number_input("D tubo–spot [cm]", 0.3, 30.0, round(gdef["D_src"], 3), 0.05)
-        theta_det = c1.number_input("θ rivelatore [°]", 0.0, 85.0, round(gdef["theta_det"], 2), 0.5)
-        D_det = c2.number_input("D spot–cristallo [cm]", 0.3, 30.0, round(gdef["D_det"], 3), 0.05)
-        src_vac = c1.number_input("Tratto in vuoto lato tubo [cm]", 0.0, 10.0,
+        theta_src = c1.number_input(t("label_theta_src"), 0.0, 85.0, round(gdef["theta_src"], 2), 0.5)
+        D_src = c2.number_input(t("label_d_src"), 0.3, 30.0, round(gdef["D_src"], 3), 0.05)
+        theta_det = c1.number_input(t("label_theta_det"), 0.0, 85.0, round(gdef["theta_det"], 2), 0.5)
+        D_det = c2.number_input(t("label_d_det"), 0.3, 30.0, round(gdef["D_det"], 3), 0.05)
+        src_vac = c1.number_input(t("label_src_vac"), 0.0, 10.0,
                                   float(cfg0.get("src_vacuum_path_cm", 0.0)), 0.05)
-        det_vac = c2.number_input("Tratto in vuoto lato rivelatore [cm]", 0.0, 10.0,
+        det_vac = c2.number_input(t("label_det_vac"), 0.0, 10.0,
                                   float(cfg0.get("det_vacuum_path_cm", 0.0)), 0.05)
-        st.caption("Parametrica: x = ∓D·sinθ, z = D·cosθ (formule di lab_xrf.yml), rivelatore puntato sullo spot. "
-                   "θ/D si usano solo in modalità parametrica.")
+        st.caption(t("caption_geo"))
 
-    with st.expander("🔬 Rivelatore X-123 FAST-SDD"):
+    with st.expander(t("exp_detector")):
         c1, c2 = st.columns(2)
-        det_area_mm2 = c1.number_input("Area attiva [mm²]", 1.0, 100.0, float(cfg0["det_area"]) * 100, 1.0,
-                                       help="25 mm² nominali, 17 mm² collimati (config).")
-        be_um = c2.number_input("Finestra Be [µm]", 0.0, 100.0, float(cfg0.get("be_window_mm", 0.0127)) * 1000, 0.1)
-        si_um = c1.number_input("Si attivo [µm]", 100.0, 1000.0, 500.0, 10.0,
-                                help="Default 500 µm (offerta ORTEC e manuale X-123).")
-        c1.caption(f"lab_xrf.yml: {cfg_si:g} µm")
-        fano = c2.number_input("Fano F", 0.05, 0.2, float(cfg0.get("detector_fano", 0.118)), 0.001, format="%.4f")
-        w_ev = c1.number_input("w [eV]", 3.5, 3.8, float(cfg0.get("detector_w_eV", 3.65)), 0.01)
-        noise_ev = c2.number_input("Rumore σ_el [eV rms]", 0.0, 60.0, float(cfg0.get("detector_noise_eV", 12.7)), 0.1)
-        use_response = st.toggle("Usa matrice Geant4 se presente", value=True, disabled=not status["response"])
+        det_area_mm2 = c1.number_input(t("label_det_area"), 1.0, 100.0, float(cfg0["det_area"]) * 100, 1.0,
+                                       help=t("help_det_area"))
+        be_um = c2.number_input(t("label_be"), 0.0, 100.0, float(cfg0.get("be_window_mm", 0.0127)) * 1000, 0.1)
+        si_um = c1.number_input(t("label_si"), 100.0, 1000.0, 500.0, 10.0, help=t("help_si"))
+        c1.caption(t("caption_si_yml", cfg_si=cfg_si))
+        fano = c2.number_input(t("label_fano"), 0.05, 0.2, float(cfg0.get("detector_fano", 0.118)), 0.001, format="%.4f")
+        w_ev = c1.number_input(t("label_w"), 3.5, 3.8, float(cfg0.get("detector_w_eV", 3.65)), 0.01)
+        noise_ev = c2.number_input(t("label_noise"), 0.0, 60.0, float(cfg0.get("detector_noise_eV", 12.7)), 0.1)
+        use_response = st.toggle(t("toggle_geant4"), value=True, disabled=not status["response"])
 
     if grid_n >= 6:
-        st.warning(f"Griglia {grid_n}×{grid_n}: circa {1.0 + 0.25 * grid_n ** 2:.0f} s per run.")
-    submitted = st.form_submit_button("▶ Simula", type="primary", width="stretch")
+        st.warning(t("warn_grid_time", n=grid_n, sec=1.0 + 0.25 * grid_n ** 2))
+    submitted = st.form_submit_button(t("btn_simulate"), type="primary", width="stretch")
 
-sb.markdown("### ⏱️ Acquisizione")
-live_time = sb.number_input("Live time [s]", 1.0, 36000.0, 300.0, 10.0)
-poisson_on = sb.toggle("Rumore Poisson", value=True)
+sb.markdown(t("sidebar_acq"))
+live_time = sb.number_input(t("label_live_time"), 1.0, 36000.0, 300.0, 10.0)
+poisson_on = sb.toggle(t("toggle_poisson"), value=True)
 c1, c2 = sb.columns([1, 1])
-seed_mode = c1.radio("Seed", ["fisso", "casuale"], horizontal=False, label_visibility="collapsed")
+seed_mode = c1.radio(t("label_seed"), ["fisso", "casuale"], horizontal=False, label_visibility="collapsed",
+                     format_func=lambda m: t("seed_fisso") if m == "fisso" else t("seed_casuale"))
 if "seed_fixed" not in st.session_state:
     st.session_state["seed_fixed"] = 42
 if "seed_rand" not in st.session_state:
     st.session_state["seed_rand"] = pysecrets.randbelow(10**9)
 if seed_mode == "fisso":
-    c2.number_input("Seed", 0, 10**9, key="seed_fixed", label_visibility="collapsed")
+    c2.number_input(t("label_seed"), 0, 10**9, key="seed_fixed", label_visibility="collapsed")
 def _new_realization(mode):
     if mode == "fisso":
         st.session_state["seed_fixed"] = int(st.session_state["seed_fixed"]) + 1
@@ -254,16 +275,15 @@ def _new_realization(mode):
         st.session_state["seed_rand"] = pysecrets.randbelow(10**9)
 
 
-sb.button("🎲 Nuova realizzazione", width="stretch", disabled=not poisson_on,
+sb.button(t("btn_new_realization"), width="stretch", disabled=not poisson_on,
           on_click=_new_realization, args=(seed_mode,))
 seed = int(st.session_state["seed_fixed"] if seed_mode == "fisso" else st.session_state["seed_rand"])
-sb.caption(f"Seed in uso: {seed}")
+sb.caption(t("caption_seed", seed=seed))
 c1, c2 = sb.columns(2)
-tpeak_us = c1.number_input("Peaking time [µs]", 0.05, 30.0, core.TPEAK_DEFAULT_us, 0.1,
-                           help="STIMA: valore tipico; quello vero è TPEA= nel .mca (sezione DP5 CONFIGURATION).")
-tau_ratio = c2.number_input("τ / Tpeak", 0.5, 5.0, core.TAU_OVER_TPEAK, 0.1,
-                            help="Dalla scheda FAST SDD: Tpeak 9.6 µs → 18 kcps in uscita al 50 % di dead time; "
-                                 "con modello paralizzabile τ ≈ 2.0 × Tpeak.")
+tpeak_us = c1.number_input(t("label_tpeak"), 0.05, 30.0, core.TPEAK_DEFAULT_us, 0.1,
+                           help=t("help_tpeak"))
+tau_ratio = c2.number_input(t("label_tau_ratio"), 0.5, 5.0, core.TAU_OVER_TPEAK, 0.1,
+                            help=t("help_tau"))
 tau_us = tpeak_us * tau_ratio
 
 # composizione caricata
@@ -277,7 +297,7 @@ if custom_file is not None:
         sample_name = "custom_" + Path(custom_file.name).stem.replace(" ", "_")
         shutil.rmtree(tmpd, ignore_errors=True)
     except Exception as exc:
-        sb.error(f"Composizione non valida: {exc}")
+        sb.error(t("err_invalid_comp", exc=exc))
 
 if grid_mode == "config":
     grid_hx, grid_hy = float(cfg0["grid_x_max"]), float(cfg0["grid_y_max"])
@@ -300,92 +320,99 @@ P = dict(st.session_state["params"])
 P["live_time"] = live_time
 
 if abs(P["si_um"] - cfg_si) > 0.5:
-    sb.caption(f"⚠️ Si attivo {P['si_um']:g} µm ≠ lab_xrf.yml ({cfg_si:g} µm)"
-               + (" — con la matrice Geant4 lo spessore deve essere quello della simulazione MC." if status["response"] else ""))
+    extra = t("caption_si_mismatch_geant4") if status["response"] else ""
+    sb.caption(t("caption_si_mismatch", si=P["si_um"], cfg=cfg_si) + extra)
 
 # ────────────────────────────────────────────────────────────────────────────
 # Simulazione
 # ────────────────────────────────────────────────────────────────────────────
 power_W = P["kv"] * P["uA"] * 1e-3
 try:
-    with st.spinner(f"Simulazione FP in corso — {P['sample']}, {P['kv']} kV, griglia {P['grid_n']}×{P['grid_n']}…"):
+    with st.spinner(t("spinner", sample=P["sample"], kv=P["kv"], n=P["grid_n"])):
         sim1 = simulate(core.phys_key(P, cfg0), {k: P[k] for k in core.PHYS_KEYS}, cfg0)
 except Exception as exc:
-    st.error("La simulazione è fallita.")
+    st.error(t("err_sim_failed"))
     st.exception(exc)
     st.stop()
 sim = core.scaled(sim1, P["uA"])
 cfgP = sim["cfg"]
 
-with sb.expander("🧪 Composizione del campione simulato", expanded=False):
-    cdf = pd.DataFrame({"El": list(sim["comp"]), "wt %": [100 * v for v in sim["comp"].values()]})
-    cdf["ppm"] = cdf["wt %"] * 1e4
-    st.dataframe(cdf.sort_values("wt %", ascending=False), hide_index=True, width="stretch",
-                 column_config={"wt %": st.column_config.NumberColumn(format="%.3f"),
-                                "ppm": st.column_config.NumberColumn(format="%.0f")})
-    st.caption("Frazioni normalizzate a somma 1 (usate anche per tabelle e LLD).")
+with sb.expander(t("exp_composition"), expanded=False):
+    cdf = pd.DataFrame({t("col_el"): list(sim["comp"]), t("col_wt"): [100 * v for v in sim["comp"].values()]})
+    cdf[t("col_ppm")] = cdf[t("col_wt")] * 1e4
+    st.dataframe(cdf.sort_values(t("col_wt"), ascending=False), hide_index=True, width="stretch",
+                 column_config={t("col_wt"): st.column_config.NumberColumn(format="%.3f"),
+                                t("col_ppm"): st.column_config.NumberColumn(format="%.0f")})
+    st.caption(t("caption_comp_norm"))
 
 # ── spettro misurato ────────────────────────────────────────────────────────
 meas = None
-with st.expander("📥 Spettro misurato (.mca Amptek/PMCA) — sovrapponi e confronta", expanded=False):
-    up = st.file_uploader("File .mca", type=["mca", "MCA", "txt"], key="meas")
+with st.expander(t("exp_measured"), expanded=False):
+    up = st.file_uploader(t("label_mca_file"), type=["mca", "MCA", "txt"], key="meas")
     if up is not None:
         try:
             meas = core.parse_mca(up.getvalue())
         except core.McaError as exc:
-            st.error(f"File non valido: {exc}")
+            st.error(t("err_invalid_file", exc=exc))
         except Exception as exc:
-            st.error(f"Errore nella lettura del file ({type(exc).__name__}): {exc}")
+            st.error(t("err_read_file", typ=type(exc).__name__, exc=exc))
     if meas is not None:
         n = len(meas["counts"])
         if meas["cal_note"]:
-            st.warning(f"Calibrazione: {meas['cal_note']}. Inserisci A, B a mano.")
+            st.warning(t("warn_cal_note", note=meas["cal_note"]))
         elif meas["calib"] is None:
-            st.warning("Nessuna sezione <<CALIBRATION>>: inserisci A, B a mano.")
+            st.warning(t("warn_no_cal"))
         cal = meas["calib"] or (0.0, 0.006, 0.0)
         c1, c2, c3, c4 = st.columns(4)
-        A = c1.number_input("A [keV]", -5.0, 5.0, float(cal[0]), 0.001, format="%.5f")
-        B = c2.number_input("B [keV/canale]", core.B_RANGE_keV[0], core.B_RANGE_keV[1], float(cal[1]), 0.0001, format="%.6f")
-        Cq = c3.number_input("C [keV/canale²]", -1e-5, 1e-5, float(cal[2]), 1e-9, format="%.3e")
+        A = c1.number_input(t("label_cal_a"), -5.0, 5.0, float(cal[0]), 0.001, format="%.5f")
+        B = c2.number_input(t("label_cal_b"), core.B_RANGE_keV[0], core.B_RANGE_keV[1], float(cal[1]), 0.0001, format="%.6f")
+        Cq = c3.number_input(t("label_cal_c"), -1e-5, 1e-5, float(cal[2]), 1e-9, format="%.3e")
         if meas["live_missing"]:
-            st.warning("LIVE_TIME mancante o nullo nel file: inserisci il live time a mano "
-                       + (f"(REAL_TIME = {meas['real']:g} s)." if meas["real"] else "."))
-        lt_m = c4.number_input("Live time misurato [s]", 0.001, 1e6, float(meas["live"] or meas["real"] or 1.0), 1.0)
+            real_txt = t("warn_live_missing_real", real=meas["real"]) if meas["real"] else t("warn_live_missing_end")
+            st.warning(t("warn_live_missing", real=real_txt))
+        lt_m = c4.number_input(t("label_meas_live"), 0.001, 1e6, float(meas["live"] or meas["real"] or 1.0), 1.0)
         meas.update(A=A, B=B, Cq=Cq, live=lt_m)
         c1, c2 = st.columns(2)
-        meas["align"] = c1.toggle("Simula sui canali del misurato", value=True)
-        meas["norm"] = c2.radio("Normalizzazione", ["nessuna", "live time", "su un picco"], index=1, horizontal=True)
-        cal_txt = (f"dal file ({meas['cal_label'] or 'senza etichetta'}, unità {meas['cal_unit']}, "
-                   f"{'quadratica' if meas['cal_deg'] == 2 else 'lineare'})" if meas["calib"] else "manuale")
-        st.caption(f"{n} canali · LIVE_TIME {meas['live']:g} s · REAL_TIME {meas['real'] or '—'} s · "
-                   f"calibrazione {cal_txt} · conteggi totali {meas['counts'].sum():,.0f}")
-        info = {"Peaking time TPEA [µs]": meas["tpeak_us"], "Gain (GAIN)": meas["gain"],
-                "Fast count": meas["fast"], "Slow count": meas["slow"],
-                "Dead time misurato [%]": None if meas["meas_dt"] is None else round(100 * meas["meas_dt"], 2)}
+        meas["align"] = c1.toggle(t("toggle_align"), value=True)
+        meas["norm"] = c2.radio(t("label_norm"), ["nessuna", "live time", "su un picco"], index=1, horizontal=True,
+                                format_func=lambda v: {"nessuna": t("norm_none"), "live time": t("norm_live"),
+                                                       "su un picco": t("norm_peak")}[v])
+        if meas["calib"]:
+            cal_txt = t("cal_from_file",
+                        label=meas["cal_label"] or t("cal_no_label"),
+                        unit=meas["cal_unit"],
+                        deg=t("cal_quadratic") if meas["cal_deg"] == 2 else t("cal_linear"))
+        else:
+            cal_txt = t("cal_manual")
+        st.caption(t("caption_meas", n=n, live=meas["live"], real=meas["real"] or "—",
+                     cal=cal_txt, tot=meas["counts"].sum()))
+        info = {t("info_tpea"): meas["tpeak_us"], t("info_gain"): meas["gain"],
+                t("info_fast"): meas["fast"], t("info_slow"): meas["slow"],
+                t("info_meas_dt"): None if meas["meas_dt"] is None else round(100 * meas["meas_dt"], 2)}
         info = {k: v for k, v in info.items() if v is not None}
         if info or meas["dp5"] or meas["status"]:
-            with st.popover("ℹ️ Impostazioni DP5 e stato DPP dal file"):
+            with st.popover(t("popover_dp5")):
                 if info:
-                    st.dataframe(pd.DataFrame({"voce": list(info), "valore": [str(v) for v in info.values()]}),
+                    st.dataframe(pd.DataFrame({t("col_item"): list(info), t("col_value"): [str(v) for v in info.values()]}),
                                  hide_index=True, width="stretch")
                 if meas["dp5"]:
                     st.markdown("**DP5 CONFIGURATION**")
-                    st.dataframe(pd.DataFrame({"chiave": list(meas["dp5"]), "valore": list(meas["dp5"].values())}),
+                    st.dataframe(pd.DataFrame({t("col_key"): list(meas["dp5"]), t("col_value"): list(meas["dp5"].values())}),
                                  hide_index=True, width="stretch", height=240)
                 if meas["status"]:
                     st.markdown("**DPP STATUS**")
-                    st.dataframe(pd.DataFrame({"voce": list(meas["status"]), "valore": list(meas["status"].values())}),
+                    st.dataframe(pd.DataFrame({t("col_item"): list(meas["status"]), t("col_value"): list(meas["status"].values())}),
                                  hide_index=True, width="stretch", height=240)
 
 # ── canali MCA ──────────────────────────────────────────────────────────────
 if meas is not None and meas.get("align"):
-    calib, n_ch, ch_src = (meas["A"], meas["B"], meas["Cq"]), len(meas["counts"]), "canali del misurato"
+    calib, n_ch, ch_src = (meas["A"], meas["B"], meas["Cq"]), len(meas["counts"]), t("ch_src_measured")
 elif status["calibration"]:
-    calib, n_ch, ch_src = core.read_calibration(cfg0["mca_calibration"]), int(cfg0["mca_channels"]), "calibrazione MCA della config"
+    calib, n_ch, ch_src = core.read_calibration(cfg0["mca_calibration"]), int(cfg0["mca_channels"]), t("ch_src_config")
 else:
     step = float(np.mean(np.diff(sim["sE"])))
     calib, n_ch = (float(sim["sE"][0]), step, 0.0), len(sim["sE"])
-    ch_src = f"griglia di simulazione ({step*1000:.0f} eV/canale)"
+    ch_src = t("ch_src_grid", step=step * 1000)
 edges = core.edges_from_calib(calib, n_ch)
 ch_E = 0.5 * (edges[1:] + edges[:-1])
 ch_w = np.diff(edges)
@@ -400,45 +427,49 @@ real_time_est = live_time / max(1.0 - dead, 1e-6)
 fwhm59 = 2.3548 * float(core.sigma_kev(5.895, P["fano"], P["noise_ev"], P["w_ev"])) * 1000
 
 m = st.columns(6)
-m[0].metric("Conteggi totali", compact(float(counts.sum())),
-            help=f"Nel live time di {live_time:g} s, {'con' if poisson_on else 'senza'} Poisson")
-m[1].metric("Rate rivelato", compact(total_rate, "cps"), help="Integrale dello spettro rivelato (sopra ~1 keV)")
-m[2].metric("Dead time (STIMA)", f"{100*dead:.1f} %",
-            help=f"1−exp(−R·τ), τ = {tau_us:.2g} µs ({tau_ratio:g} × Tpeak {tpeak_us:g} µs); "
-                 f"real time stimato {real_time_est:.0f} s. Ar, righe della box e pile-up non inclusi.")
-m[3].metric("Potenza tubo", f"{power_W:.2f} W", delta=f"max {core.MINI_X2_MAX_W:.0f} W",
+m[0].metric(t("metric_total_counts"), compact(float(counts.sum())),
+            help=t("help_total_counts", lt=live_time,
+                   poisson=t("with_poisson") if poisson_on else t("without_poisson")))
+m[1].metric(t("metric_rate"), compact(total_rate, "cps"), help=t("help_rate"))
+m[2].metric(t("metric_dead"), f"{100*dead:.1f} %",
+            help=t("help_dead", tau=tau_us, ratio=tau_ratio, tpeak=tpeak_us, rt=real_time_est))
+m[3].metric(t("metric_power"), f"{power_W:.2f} W", delta=t("metric_power_max", w=core.MINI_X2_MAX_W),
             delta_color="inverse" if power_W > core.MINI_X2_MAX_W else "off")
-m[4].metric("FWHM @ 5.9 keV", f"{fwhm59:.0f} eV")
-m[5].metric("Tempo di calcolo", f"{sim['dt']:.1f} s", help="Primo run per kV/filtro/target: +~7 s per SpekPy. Poi cache.")
+m[4].metric(t("metric_fwhm"), f"{fwhm59:.0f} eV")
+m[5].metric(t("metric_compute"), f"{sim['dt']:.1f} s", help=t("help_compute"))
 if power_W > core.MINI_X2_MAX_W:
-    st.error(f"⚠️ {P['kv']} kV × {P['uA']} µA = {power_W:.2f} W: oltre i 4 W del Mini-X2. "
-             f"A {P['kv']} kV la corrente massima è {core.MINI_X2_MAX_W / P['kv'] * 1000:.0f} µA.")
+    st.error(t("err_power", kv=P["kv"], uA=P["uA"], power=power_W,
+               imax=core.MINI_X2_MAX_W / P["kv"] * 1000))
 if sim["n_valid"] < P["grid_n"] ** 2:
-    st.warning(f"Solo {sim['n_valid']} celle su {P['grid_n']**2} sono viste da tubo e rivelatore.")
+    st.warning(t("warn_cells", n_valid=sim["n_valid"], n_tot=P["grid_n"] ** 2))
 if meas is not None and meas.get("meas_dt") is not None:
-    st.caption(f"Dead time misurato dal file: {100*meas['meas_dt']:.1f} % "
-               f"({'fast/slow count' if meas['fast'] else '1 − LIVE/REAL'}) · stimato per la simulazione: {100*dead:.1f} %")
+    src = t("dt_fast_slow") if meas["fast"] else t("dt_live_real")
+    st.caption(t("caption_dt_meas", meas=100 * meas["meas_dt"], src=src, est=100 * dead))
 
 tab_spec, tab_lines, tab_cmp, tab_inst, tab_notes = st.tabs(
-    ["📈 Spettro", "📋 Righe & LLD", "🔀 Confronto run", "🛰️ Strumento", "📝 Note fisiche"])
+    [t("tab_spectrum"), t("tab_lines"), t("tab_compare"), t("tab_instrument"), t("tab_notes")])
 psi = core.scattering_angle_deg(cfgP)
 emax_default = float(min(P["kv"], 40.0))
 
 # ── TAB SPETTRO ─────────────────────────────────────────────────────────────
 with tab_spec:
     c = st.columns([1.2, 1.2, 2.2, 1.4])
-    ymode = c[0].radio("Asse y", ["conteggi/canale", "ph/s/keV"])
-    yscale = c[1].radio("Scala", ["log", "lin"])
-    erange = c[2].slider("Energia [keV]", 0.0, float(P["kv"]), (1.0, emax_default), 0.1)
-    show_comp = c[3].multiselect("Componenti", ["fluorescenza", "coerente", "incoerente"],
+    ymode = c[0].radio(t("label_yaxis"), ["conteggi/canale", "ph/s/keV"],
+                       format_func=lambda v: t("y_counts") if v == "conteggi/canale" else t("y_density"))
+    yscale = c[1].radio(t("label_scale"), ["log", "lin"],
+                        format_func=lambda v: t("scale_log") if v == "log" else t("scale_lin"))
+    erange = c[2].slider(t("label_energy"), 0.0, float(P["kv"]), (1.0, emax_default), 0.1)
+    show_comp = c[3].multiselect(t("label_components"), ["fluorescenza", "coerente", "incoerente"],
                                  default=[] if sim["used_response"] else ["coerente", "incoerente"],
                                  disabled=sim["used_response"],
-                                 help="Con la matrice Geant4 le componenti non sono separabili.")
+                                 format_func=lambda n: t({"fluorescenza": "comp_fluo", "coerente": "comp_coh",
+                                                          "incoerente": "comp_inc"}[n]),
+                                 help=t("help_components"))
     c = st.columns([1, 1, 1, 3])
-    show_labels = c[0].toggle("Etichette righe", value=True)
-    show_ar = c[1].toggle("Zona Ar", value=True)
-    show_expected = c[2].toggle("Valore atteso", value=poisson_on)
-    n_labels = c[3].slider("Numero massimo di etichette", 3, 40, 16)
+    show_labels = c[0].toggle(t("toggle_labels"), value=True)
+    show_ar = c[1].toggle(t("toggle_ar"), value=True)
+    show_expected = c[2].toggle(t("toggle_expected"), value=poisson_on)
+    n_labels = c[3].slider(t("label_n_labels"), 3, 40, 16)
     to_counts = ymode == "conteggi/canale"
 
     def as_y(ch_counts):          # conteggi per canale → asse scelto
@@ -449,16 +480,17 @@ with tab_spec:
                         row_heights=[0.76, 0.24] if has_meas else [1.0], vertical_spacing=0.04)
     if poisson_on:
         fig.add_trace(go.Scatter(x=ch_E, y=as_y(counts), mode="lines", line=dict(color=C["poisson"], width=1, shape="hvh"),
-                                 name=f"simulato + Poisson (seed {seed})"), 1, 1)
+                                 name=t("trace_sim_poisson", seed=seed)), 1, 1)
     if show_expected or not poisson_on:
         fig.add_trace(go.Scatter(x=ch_E, y=as_y(expected), mode="lines", line=dict(color=C["total"], width=2),
-                                 name="simulato (atteso)" + (" · Geant4" if sim["used_response"] else "")), 1, 1)
-    comp_map = {"fluorescenza": ("comp_fluo", C["fluo"]), "coerente": ("comp_coh", C["coh"]),
-                "incoerente": ("comp_inc", C["inc"])}
+                                 name=t("trace_sim_expected") + (t("trace_geant4_suffix") if sim["used_response"] else "")), 1, 1)
+    comp_map = {"fluorescenza": ("comp_fluo", C["fluo"], "comp_fluo"),
+                "coerente": ("comp_coh", C["coh"], "comp_coh"),
+                "incoerente": ("comp_inc", C["inc"], "comp_inc")}
     for name in show_comp:
-        key, col = comp_map[name]
+        key, col, tkey = comp_map[name]
         fig.add_trace(go.Scatter(x=ch_E, y=as_y(core.component_on_channels(sim, key, edges) * live_time),
-                                 mode="lines", line=dict(color=col, width=1.3, dash="dot"), name=name), 1, 1)
+                                 mode="lines", line=dict(color=col, width=1.3, dash="dot"), name=t(tkey)), 1, 1)
 
     k_meas = 1.0
     if has_meas:
@@ -472,7 +504,7 @@ with tab_spec:
             gl = gl[(gl["E"] > max(erange[0], 1.0)) & (gl["E"] < erange[1])].sort_values("cps", ascending=False)
             opts = [f"{r.Element} {r.Group} ({r.E:.2f} keV)" for r in gl.itertuples()]
             if opts:
-                choice = st.selectbox("Picco per la normalizzazione", opts)
+                choice = st.selectbox(t("label_norm_peak"), opts)
                 E0 = float(choice.split("(")[1].split()[0])
                 fw = 2.3548 * float(core.sigma_kev(E0, P["fano"], P["noise_ev"], P["w_ev"]))
                 win = np.array([E0 - 0.9 * fw, E0 + 0.9 * fw])
@@ -482,21 +514,21 @@ with tab_spec:
                 k_meas = sim_w / meas_w if meas_w > 0 else 1.0
         y_m = meas["counts"] * k_meas if to_counts else meas["counts"] * k_meas / (live_time * m_w)
         fig.add_trace(go.Scatter(x=m_E, y=y_m, mode="lines", line=dict(color=C["meas"], width=1.2, shape="hvh"),
-                                 name=f"misurato × {k_meas:.3g}"), 1, 1)
+                                 name=t("trace_measured", k=k_meas)), 1, 1)
         if meas.get("align"):
             res = core.residuals(meas["counts"], expected, k_meas)
             fig.add_trace(go.Scatter(x=ch_E, y=res, mode="lines", line=dict(color=C["meas"], width=1),
-                                     name="(mis − sim)/√sim", showlegend=False), 2, 1)
-            fig.update_yaxes(title_text="residui [σ]", row=2, col=1, gridcolor=C["grid"], zeroline=True,
+                                     name=t("trace_residuals"), showlegend=False), 2, 1)
+            fig.update_yaxes(title_text=t("axis_residuals"), row=2, col=1, gridcolor=C["grid"], zeroline=True,
                              zerolinecolor="rgba(229,233,242,0.4)")
         else:
-            fig.add_annotation(text="Residui disponibili con «Simula sui canali del misurato»", row=2, col=1,
+            fig.add_annotation(text=t("anno_residuals"), row=2, col=1,
                                x=0.5, y=0.5, xref="x domain", yref="y2 domain", showarrow=False,
                                font=dict(color="#8C96B0"))
 
     if show_ar:
         fig.add_vrect(x0=core.AR_ZONE[0], x1=core.AR_ZONE[1], fillcolor="rgba(248,113,113,0.10)", line_width=0,
-                      annotation_text="Ar K (2.96 keV): non modellato", annotation_position="top left",
+                      annotation_text=t("anno_ar"), annotation_position="top left",
                       annotation_font=dict(color="#FCA5A5", size=11), row=1, col=1)
 
     ref_x, ref_y = ch_E, as_y(expected)
@@ -521,55 +553,55 @@ with tab_spec:
                                font=dict(size=10, color="#93C5FD" if "Ag" in label else "#E5E9F2"), row=1, col=1)
 
     fig.update_yaxes(type="log" if yscale == "log" else "linear",
-                     title_text="conteggi / canale" if to_counts else "ph / s / keV", gridcolor=C["grid"], row=1, col=1)
+                     title_text=t("axis_counts") if to_counts else t("axis_density"), gridcolor=C["grid"], row=1, col=1)
     if yscale == "log":
         sel = (ref_x >= erange[0]) & (ref_x <= erange[1])
         ymax = float(np.max(ref_y[sel])) if sel.any() else 1.0
         floor = 0.5 if to_counts else ymax * 1e-6
         fig.update_yaxes(range=[math.log10(max(floor, 1e-12)), math.log10(max(ymax, 1e-9) * 6)], row=1, col=1)
     fig.update_xaxes(range=list(erange), gridcolor=C["grid"], row=1, col=1)
-    fig.update_xaxes(title_text="Energia [keV]", gridcolor=C["grid"], row=2 if has_meas else 1, col=1)
+    fig.update_xaxes(title_text=t("axis_energy"), gridcolor=C["grid"], row=2 if has_meas else 1, col=1)
     fig.update_layout(**PLOT_BG, height=620 if has_meas else 560, margin=dict(l=60, r=20, t=40, b=50),
                       hovermode="x unified",
                       legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
-                      title=dict(text=f"<b>{P['sample']}</b> · {P['kv']} kV · {P['uA']} µA · "
-                                      f"{'aria' if P['atmosphere']=='air' else 'vuoto'} · LT {live_time:g} s · "
-                                      f"griglia {P['grid_n']}×{P['grid_n']}", font=dict(size=14), x=0.0, y=0.995))
+                      title=dict(text=t("plot_title", sample=P["sample"], kv=P["kv"], uA=P["uA"],
+                                        atm=atm_label(P["atmosphere"]), lt=live_time, n=P["grid_n"]),
+                                 font=dict(size=14), x=0.0, y=0.995))
     st.plotly_chart(fig, width="stretch", config={"displaylogo": False, "toImageButtonOptions":
                     {"format": "png", "filename": f"xrf_{P['sample']}_{P['kv']}kV", "scale": 2}})
-    st.markdown(f"<span class='small-note'>Canali: {ch_src} · {n_ch} canali · picchi integrati sui canali "
-                f"(continuo con interpolazione monotona della cumulata) · angolo di scattering {psi:.0f}° · "
-                f"spettro del tubo da {sim['E'][0]:.3f} keV.</span>", unsafe_allow_html=True)
+    st.markdown(f"<span class='small-note'>{t('caption_channels', src=ch_src, n=n_ch, psi=psi, emin=sim['E'][0])}</span>",
+                unsafe_allow_html=True)
 
-    st.markdown("#### 💾 Salva ed esporta")
+    st.markdown(t("section_export"))
     c = st.columns([2, 1, 1, 1, 1, 1])
-    filt_txt = ", ".join(f"{m_} {t:g} mm" for m_, t in cfgP["tube"]["filters"].items())
-    default_label = (f"{P['sample']} · {P['kv']} kV {P['uA']} µA · {'aria' if P['atmosphere']=='air' else 'vuoto'}"
+    filt_txt = ", ".join(f"{m_} {th:g} mm" for m_, th in cfgP["tube"]["filters"].items())
+    default_label = (f"{P['sample']} · {P['kv']} kV {P['uA']} µA · {atm_label(P['atmosphere'])}"
                      + (f" · {P['filter_mat']} {P['filter_mm']} mm" if P['filter_mat'] != 'nessuno' and P['filter_mm'] > 0 else ""))
-    run_label = c[0].text_input("Etichetta run", default_label, label_visibility="collapsed")
-    if c[1].button("📌 Aggiungi al confronto", width="stretch"):
+    run_label = c[0].text_input(t("label_run"), default_label, label_visibility="collapsed")
+    if c[1].button(t("btn_add_compare"), width="stretch"):
         runs = st.session_state.setdefault("runs", [])
         gl = core.grouped_lines(sim["fluo"])
         runs.append(dict(label=run_label, E=sim["sE"], spec=sim["spec"], params=dict(P),
                          lines={f"{r.Element} {r.Group}": r.cps for r in gl.itertuples()},
                          lines_E={f"{r.Element} {r.Group}": r.E for r in gl.itertuples()}))
         st.session_state["runs"] = runs[-8:]
-        st.toast(f"Run salvato: {run_label}", icon="📌")
+        st.toast(t("toast_run_saved", label=run_label), icon="📌")
 
     base = f"xrf_{P['sample']}_{P['kv']}kV_{P['uA']}uA_{P['atmosphere']}"
-    desc = (f"XRF sim {P['sample']} {P['kv']}kV {P['uA']}uA {P['atmosphere']} filtri[{filt_txt}] "
-            f"{'Poisson seed ' + str(seed) if poisson_on else 'atteso'} DT_stima {100*dead:.1f}%")
+    noise_txt = t("poisson_seed", seed=seed) if poisson_on else t("expected_word")
+    desc = (f"XRF sim {P['sample']} {P['kv']}kV {P['uA']}uA {P['atmosphere']} "
+            f"{t('tag_filters')}[{filt_txt}] {noise_txt} {t('dt_est_tag')} {100*dead:.1f}%")
     c[2].download_button("⬇ .mca", core.write_mca(counts, calib, live_time, real_time_est, desc),
                          file_name=base + ".mca", width="stretch",
-                         help=f"REAL_TIME = LIVE_TIME/(1−DT) = {real_time_est:.1f} s (dead time stimato)")
+                         help=t("help_mca", rt=real_time_est))
     spec_df = pd.DataFrame({"Energy_keV": sim["E"], "fluorescence_ph_s_keV": sim["comp_fluo"],
                             "coherent_ph_s_keV": sim["comp_coh"], "incoherent_ph_s_keV": sim["comp_inc"]})
     spec_df["total_gaussian_ph_s_keV"] = spec_df.iloc[:, 1:].sum(axis=1)
     chan_df = pd.DataFrame({"channel": np.arange(n_ch), "E_keV": ch_E, "expected_counts": expected, "counts": counts})
     csv_buf = io.StringIO()
-    csv_buf.write(f"# {desc}; live_time_s={live_time}; canali: {ch_src}\n")
+    csv_buf.write(t("csv_comment_channels", desc=desc, lt=live_time, src=ch_src))
     chan_df.to_csv(csv_buf, index=False)
-    csv_buf.write("\n# Densità sulla griglia di simulazione (ph/s/keV, risposta gaussiana)\n")
+    csv_buf.write(t("csv_comment_grid"))
     spec_df.to_csv(csv_buf, index=False)
     c[3].download_button("⬇ .csv", csv_buf.getvalue().encode(), file_name=base + ".csv", width="stretch")
     lld_def_dl = st.session_state.get("lld_def", "3√B")
@@ -577,12 +609,12 @@ with tab_spec:
     lines_out = sim["fluo"].copy()
     lines_out["counts_in_live_time"] = lines_out["cps_det"] * live_time
     with pd.ExcelWriter(xbuf) as xw:
-        lines_out.to_excel(xw, sheet_name="Righe", index=False)
+        lines_out.to_excel(xw, sheet_name=t("sheet_lines"), index=False)
         core.lld_table(sim, live_time, float(sim["E"][0]), float(P["kv"]), lld_def_dl).to_excel(
-            xw, sheet_name="LLD (stima)", index=False)
-        pd.DataFrame({"parametro": list(P), "valore": [str(v) for v in P.values()]}).to_excel(
-            xw, sheet_name="Parametri", index=False)
-    c[4].download_button("⬇ .xlsx", xbuf.getvalue(), file_name=base + "_righe.xlsx", width="stretch")
+            xw, sheet_name=t("sheet_lld"), index=False)
+        pd.DataFrame({t("col_param"): list(P), t("col_param_value"): [str(v) for v in P.values()]}).to_excel(
+            xw, sheet_name=t("sheet_params"), index=False)
+    c[4].download_button("⬇ .xlsx", xbuf.getvalue(), file_name=base + t("xlsx_suffix"), width="stretch")
     cfg_text, cfg_extra = core.export_config(P, cfg0, P["uA"], live_time)
     if cfg_extra:
         zbuf = io.BytesIO()
@@ -591,69 +623,65 @@ with tab_spec:
             for name_, txt in cfg_extra.items():
                 z.writestr(name_, txt)
         c[5].download_button("⬇ config", zbuf.getvalue(), file_name=base + "_config.zip", width="stretch",
-                             help="Config + composizione caricata (compositions_gui/).")
+                             help=t("help_config_zip"))
     else:
         c[5].download_button("⬇ config", cfg_text.encode(), file_name=base + ".yml", width="stretch")
 
 # ── TAB RIGHE ───────────────────────────────────────────────────────────────
 with tab_lines:
     if sim["used_response"]:
-        st.warning("Matrice Geant4 attiva: lo spettro usa la matrice, ma tabella righe, P/B e LLD usano picchi "
-                   "gaussiani e QE solo fotoelettrica (approssimazione).")
-    st.markdown("#### Righe di fluorescenza")
+        st.warning(t("warn_geant4_lines"))
+    st.markdown(t("section_fluo_lines"))
     df = sim["fluo"][sim["fluo"]["Intensity_ph_s"] > 0]
+    col_counts = t("col_counts_in_lt", lt=live_time)
     tab = pd.DataFrame({
-        "Elemento": df["Element"], "Riga": df["Line"], "E [keV]": df["E_line_keV"],
-        "Conc. [ppm]": df["Concentration"] * 1e6,
-        "Ingresso riv. [ph/s]": df["Intensity_ph_s"], "T_Be·QE_Si": df["T_Be_QE"],
-        "Rivelati [cps]": df["cps_det"], f"Conteggi in {live_time:g} s": df["cps_det"] * live_time})
-    min_cps = st.slider("Mostra righe con rate rivelato ≥ [cps]", 0.0, 1.0, 0.001, 0.001, format="%.3f")
-    tab = tab[tab["Rivelati [cps]"] >= min_cps].sort_values("Rivelati [cps]", ascending=False)
+        t("col_element"): df["Element"], t("col_line"): df["Line"], t("col_e_kev"): df["E_line_keV"],
+        t("col_conc_ppm"): df["Concentration"] * 1e6,
+        t("col_entrance"): df["Intensity_ph_s"], t("col_tbe_qe"): df["T_Be_QE"],
+        t("col_detected"): df["cps_det"], col_counts: df["cps_det"] * live_time})
+    min_cps = st.slider(t("label_min_cps"), 0.0, 1.0, 0.001, 0.001, format="%.3f")
+    tab = tab[tab[t("col_detected")] >= min_cps].sort_values(t("col_detected"), ascending=False)
     st.dataframe(tab, hide_index=True, width="stretch", height=360, column_config={
-        "E [keV]": st.column_config.NumberColumn(format="%.4f"),
-        "Conc. [ppm]": st.column_config.NumberColumn(format="%.1f"),
-        "Ingresso riv. [ph/s]": st.column_config.NumberColumn(format="%.4g"),
-        "T_Be·QE_Si": st.column_config.ProgressColumn(min_value=0.0, max_value=1.0, format="%.3f"),
-        "Rivelati [cps]": st.column_config.NumberColumn(format="%.4g"),
-        f"Conteggi in {live_time:g} s": st.column_config.NumberColumn(format="%.4g")})
+        t("col_e_kev"): st.column_config.NumberColumn(format="%.4f"),
+        t("col_conc_ppm"): st.column_config.NumberColumn(format="%.1f"),
+        t("col_entrance"): st.column_config.NumberColumn(format="%.4g"),
+        t("col_tbe_qe"): st.column_config.ProgressColumn(min_value=0.0, max_value=1.0, format="%.3f"),
+        t("col_detected"): st.column_config.NumberColumn(format="%.4g"),
+        col_counts: st.column_config.NumberColumn(format="%.4g")})
 
     c1, c2 = st.columns([3, 2])
-    c1.markdown("#### Picco/fondo e limite di rivelabilità  <span class='badge warn'>STIMA</span>", unsafe_allow_html=True)
-    lld_def = c2.radio("Definizione LLD", ["3√B", "Currie"], horizontal=True, key="lld_def",
-                       help="3√B: 3√B/N·c. Currie: L_D ≈ 2.71 + 4.65√B conteggi (blank appaiato).")
+    c1.markdown(t("section_pb_lld"), unsafe_allow_html=True)
+    lld_def = c2.radio(t("label_lld_def"), ["3√B", "Currie"], horizontal=True, key="lld_def",
+                       help=t("help_lld_def"))
     lt = core.lld_table(sim, live_time, float(sim["E"][0]), float(P["kv"]), lld_def)
-    lcol = f"LLD {lld_def} [ppm] (STIMA)"
+    lcol = t("col_lld_value", definition=lld_def)
     if not lt.empty:
         c1, c2 = st.columns([3, 2])
         fmt = {k: st.column_config.NumberColumn(format=f) for k, f in [
-            ("Conc. [ppm]", "%.1f"), ("FWHM [eV]", "%.0f"), ("N picco (finestra)", "%.3g"),
-            ("B fondo (finestra)", "%.3g"), ("P/B", "%.3g"), ("σ statistico [%]", "%.2f"),
-            ("LLD Kα [ppm]", "%.3g"), ("LLD Lα [ppm]", "%.3g"), (lcol, "%.3g")]}
+            (t("col_conc_ppm"), "%.1f"), (t("col_fwhm_ev"), "%.0f"), (t("col_n_peak"), "%.3g"),
+            (t("col_b_bkg"), "%.3g"), (t("col_pb"), "%.3g"), (t("col_stat_sigma"), "%.2f"),
+            (t("col_lld_ka"), "%.3g"), (t("col_lld_la"), "%.3g"), (lcol, "%.3g")]}
         c1.dataframe(lt, hide_index=True, width="stretch", height=420, column_config=fmt)
-        lf = go.Figure(go.Bar(x=lt["Elemento"] + " " + lt["Riga usata"], y=lt[lcol],
-                              marker=dict(color=lt["E [keV]"], colorscale="Tealrose", showscale=False),
+        lf = go.Figure(go.Bar(x=lt[t("col_element")] + " " + lt[t("col_line_used")], y=lt[lcol],
+                              marker=dict(color=lt[t("col_e_kev")], colorscale="Tealrose", showscale=False),
                               hovertemplate="%{x}: %{y:.3g} ppm<extra></extra>"))
-        lf.update_layout(**PLOT_BG, height=420, yaxis=dict(type="log", title="LLD [ppm]", gridcolor=C["grid"]),
+        lf.update_layout(**PLOT_BG, height=420, yaxis=dict(type="log", title=t("axis_lld"), gridcolor=C["grid"]),
                          margin=dict(l=50, r=10, t=30, b=40),
-                         title=dict(text=f"LLD ({lld_def}) in {live_time:g} s", font=dict(size=13)))
+                         title=dict(text=t("title_lld", definition=lld_def, lt=live_time), font=dict(size=13)))
         c2.plotly_chart(lf, width="stretch", config={"displaylogo": False})
-    st.caption(f"Per ogni elemento si valutano Kα e Lα (se eccitate e dentro la griglia) e si sceglie la LLD migliore. "
-               f"Finestra = {core.WIN_FWHM} × FWHM; N = conteggi netti del gruppo nella finestra; B = continuo di "
-               "scattering + code delle altre righe nella finestra. Concentrazioni normalizzate a somma 1, risposta "
-               "lineare. Con 3√B e B < 10 conteggi la LLD non è definita (cella vuota). Senza Ar, pile-up, escape e "
-               "shelf: ordine di grandezza, non un valore di specifica.")
+    st.caption(t("caption_lld", win=core.WIN_FWHM))
 
 # ── TAB CONFRONTO ───────────────────────────────────────────────────────────
 with tab_cmp:
     runs = st.session_state.get("runs", [])
     if not runs:
-        st.info("Nessun run salvato. Nel tab «Spettro» premi **📌 Aggiungi al confronto** (per esempio "
-                "una volta in aria e una nel vuoto, oppure con due campioni).")
+        st.info(t("info_no_runs"))
     else:
         c1, c2, c3 = st.columns([1, 1, 3])
-        cmp_scale = c1.radio("Scala ", ["log", "lin"], horizontal=True, key="cmp_scale")
-        cmp_norm = c2.toggle("Normalizza per µA", value=False)
-        if c3.button("🗑️ Svuota il confronto"):
+        cmp_scale = c1.radio(t("label_scale"), ["log", "lin"], horizontal=True, key="cmp_scale",
+                             format_func=lambda v: t("scale_log") if v == "log" else t("scale_lin"))
+        cmp_norm = c2.toggle(t("toggle_norm_ua"), value=False)
+        if c3.button(t("btn_clear_compare")):
             st.session_state["runs"] = []
             st.rerun()
         fig2 = go.Figure()
@@ -668,15 +696,15 @@ with tab_cmp:
             fig2.update_yaxes(range=[math.log10(ymax2) - 5, math.log10(ymax2) + 0.4])
         fig2.update_layout(**PLOT_BG, height=480, hovermode="x unified", margin=dict(l=60, r=20, t=20, b=50),
                            legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0),
-                           xaxis=dict(title="Energia [keV]", range=[1, 26], gridcolor=C["grid"]),
-                           yaxis=dict(title="ph/s/keV" + (" per µA" if cmp_norm else ""),
+                           xaxis=dict(title=t("axis_energy"), range=[1, 26], gridcolor=C["grid"]),
+                           yaxis=dict(title=t("axis_density_per_ua") if cmp_norm else "ph/s/keV",
                                       type="log" if cmp_scale == "log" else "linear", gridcolor=C["grid"]))
         st.plotly_chart(fig2, width="stretch", config={"displaylogo": False})
         keys = sorted({k for r in runs for k in r["lines"]}, key=lambda k: -max(r["lines"].get(k, 0) for r in runs))[:20]
         keys = sorted(keys, key=lambda k: next(r["lines_E"][k] for r in runs if k in r["lines_E"]))
         rows = []
         for k in keys:
-            row = {"Riga": k, "E [keV]": next(r["lines_E"][k] for r in runs if k in r["lines_E"])}
+            row = {t("col_line"): k, t("col_e_kev"): next(r["lines_E"][k] for r in runs if k in r["lines_E"])}
             ref_v = runs[0]["lines"].get(k, 0.0) / (runs[0]["params"]["uA"] if cmp_norm else 1.0)
             for i, r in enumerate(runs):
                 v = r["lines"].get(k, 0.0) / (r["params"]["uA"] if cmp_norm else 1.0)
@@ -684,10 +712,11 @@ with tab_cmp:
                 if i > 0:
                     row[f"[{i+1}]/[1]"] = v / ref_v if ref_v > 0 else np.nan
             rows.append(row)
-        st.markdown("**Righe principali (rate rivelato)** — " + " · ".join(f"[{i+1}] {r['label']}" for i, r in enumerate(runs)))
+        st.markdown(t("section_main_lines") + " · ".join(f"[{i+1}] {r['label']}" for i, r in enumerate(runs)))
         rdf = pd.DataFrame(rows)
         st.dataframe(rdf, hide_index=True, width="stretch",
-                     column_config={c_: st.column_config.NumberColumn(format="%.4g") for c_ in rdf.columns if c_ != "Riga"})
+                     column_config={c_: st.column_config.NumberColumn(format="%.4g")
+                                    for c_ in rdf.columns if c_ != t("col_line")})
 
 # ── TAB STRUMENTO ───────────────────────────────────────────────────────────
 with tab_inst:
@@ -697,20 +726,22 @@ with tab_inst:
     g.add_shape(type="rect", x0=-6, x1=6, y0=-0.6, y1=0, fillcolor="#3b3f4f", line_width=0)
     g.add_shape(type="rect", x0=-P["grid_hx"], x1=P["grid_hx"], y0=-0.06, y1=0.06,
                 fillcolor="rgba(45,212,191,0.8)", line_width=0)
-    for (x, z, col, name) in [(sx, sz, "#FBBF24", "tubo Mini-X2"), (dx, dz, "#F472B6", "X-123")]:
+    for (x, z, col, name) in [(sx, sz, "#FBBF24", t("name_tube")), (dx, dz, "#F472B6", t("name_det"))]:
         g.add_trace(go.Scatter(x=[x, 0], y=[z, 0], mode="lines", line=dict(color=col, width=2, dash="dot"),
                                showlegend=False, hoverinfo="skip"))
         g.add_trace(go.Scatter(x=[x], y=[z], mode="markers+text", text=[name], textposition="top center",
                                marker=dict(size=16, color=col, symbol="square"), name=name))
-    g.add_annotation(x=0, y=-0.35, text=f"area illuminata ±{P['grid_hx']:.2f} × ±{P['grid_hy']:.2f} cm",
+    g.add_annotation(x=0, y=-0.35, text=t("anno_illuminated", hx=P["grid_hx"], hy=P["grid_hy"]),
                      showarrow=False, font=dict(color="#CFD6E6", size=11))
     off_plane = abs(cfgP["src_y"]) > 1e-6 or abs(cfgP["det_y"]) > 1e-6
     g.update_layout(**PLOT_BG, height=360, margin=dict(l=40, r=10, t=40, b=40), showlegend=False,
-                    title=dict(text=f"Geometria (proiezione x–z{' — componenti y non mostrate' if off_plane else ''}) · "
-                                    f"scattering {psi:.0f}° · {'config' if P['geo_mode']=='config' else 'parametrica'}",
+                    title=dict(text=t("title_geo",
+                                      yoff=t("geo_y_off") if off_plane else "",
+                                      psi=psi,
+                                      mode=t("geo_mode_config") if P["geo_mode"] == "config" else t("geo_mode_param")),
                                font=dict(size=13)),
-                    xaxis=dict(title="x [cm]", range=[-7, 7], gridcolor=C["grid"]),
-                    yaxis=dict(title="z [cm]", range=[-0.8, max(sz, dz) * 1.35], gridcolor=C["grid"], scaleanchor="x", scaleratio=1))
+                    xaxis=dict(title=t("axis_x_cm"), range=[-7, 7], gridcolor=C["grid"]),
+                    yaxis=dict(title=t("axis_z_cm"), range=[-0.8, max(sz, dz) * 1.35], gridcolor=C["grid"], scaleanchor="x", scaleratio=1))
     c1.plotly_chart(g, width="stretch", config={"displaylogo": False})
 
     r_src = math.dist((0, 0, 0), (cfgP["src_x"], cfgP["src_y"], cfgP["src_z"]))
@@ -723,15 +754,15 @@ with tab_inst:
     L_in = max(r_src - P["src_vac"], 0.0)
     Tair = np.exp(-mu_air(Eg) * L_out)
     e = go.Figure()
-    for y, name, col, dash in [(TBe, f"Be {P['be_um']:.1f} µm", C["coh"], "dot"),
-                               (QE, f"Si {P['si_um']:.0f} µm (fotoel.)", C["inc"], "dot"),
-                               (Tair, f"{'aria' if P['atmosphere']=='air' else 'vuoto'} {L_out:.2f} cm", C["fluo"], "dot"),
-                               (TBe * QE * Tair, "totale", C["total"], "solid")]:
+    for y, name, col, dash in [(TBe, t("eff_be", um=P["be_um"]), C["coh"], "dot"),
+                               (QE, t("eff_si", um=P["si_um"]), C["inc"], "dot"),
+                               (Tair, t("eff_atm_path", atm=atm_label(P["atmosphere"]), L=L_out), C["fluo"], "dot"),
+                               (TBe * QE * Tair, t("eff_total"), C["total"], "solid")]:
         e.add_trace(go.Scatter(x=Eg, y=y, name=name, line=dict(color=col, dash=dash, width=2 if dash == "solid" else 1.4)))
     e.update_layout(**PLOT_BG, height=360, margin=dict(l=50, r=10, t=40, b=40), hovermode="x unified",
-                    title=dict(text="Efficienza lato rivelatore", font=dict(size=13)),
-                    legend=dict(orientation="h", y=-0.25), xaxis=dict(title="Energia [keV]", type="log", gridcolor=C["grid"]),
-                    yaxis=dict(title="trasmissione / efficienza", range=[0, 1.02], gridcolor=C["grid"]))
+                    title=dict(text=t("title_efficiency"), font=dict(size=13)),
+                    legend=dict(orientation="h", y=-0.25), xaxis=dict(title=t("axis_energy"), type="log", gridcolor=C["grid"]),
+                    yaxis=dict(title=t("axis_transmission"), range=[0, 1.02], gridcolor=C["grid"]))
     c2.plotly_chart(e, width="stretch", config={"displaylogo": False})
 
     c1, c2 = st.columns(2)
@@ -740,65 +771,33 @@ with tab_inst:
         tcfg["current_mA"] = P["uA"] / 1000.0
         with contextlib.redirect_stdout(io.StringIO()):
             Et, Pt = core.tube_source_term(tcfg, Path(cfg0["_repo_root"]) / ".cache" / "tube")
-        t = go.Figure()
-        t.add_trace(go.Scatter(x=Et, y=Pt, name="uscita tubo", line=dict(color=C["inc"], width=1.6)))
+        tu = go.Figure()
+        tu.add_trace(go.Scatter(x=Et, y=Pt, name=t("trace_tube_out"), line=dict(color=C["inc"], width=1.6)))
         if P["atmosphere"] == "air":
-            t.add_trace(go.Scatter(x=Et, y=Pt * np.exp(-mu_air(Et) * L_in), name=f"dopo {L_in:.2f} cm d'aria",
-                                   line=dict(color=C["total"], width=1.6)))
-        t.update_layout(**PLOT_BG, height=360, margin=dict(l=60, r=10, t=40, b=40), hovermode="x unified",
-                        title=dict(text=f"Spettro del tubo (SpekPy) · {P['kv']} kV · Ag {P['target_um']} µm · "
-                                        f"filtri {filt_txt or 'nessuno'}", font=dict(size=13)),
-                        legend=dict(orientation="h", y=-0.25), xaxis=dict(title="Energia [keV]", gridcolor=C["grid"]),
-                        yaxis=dict(title="ph/s/keV/sr", type="log", gridcolor=C["grid"],
-                                   range=[math.log10(Pt.max()) - 5, math.log10(Pt.max()) + 0.3]))
-        c1.plotly_chart(t, width="stretch", config={"displaylogo": False})
+            tu.add_trace(go.Scatter(x=Et, y=Pt * np.exp(-mu_air(Et) * L_in), name=t("trace_after_air", L=L_in),
+                                    line=dict(color=C["total"], width=1.6)))
+        tu.update_layout(**PLOT_BG, height=360, margin=dict(l=60, r=10, t=40, b=40), hovermode="x unified",
+                         title=dict(text=t("title_tube", kv=P["kv"], um=P["target_um"],
+                                           filt=filt_txt or t("filter_none")), font=dict(size=13)),
+                         legend=dict(orientation="h", y=-0.25), xaxis=dict(title=t("axis_energy"), gridcolor=C["grid"]),
+                         yaxis=dict(title=t("axis_tube_y"), type="log", gridcolor=C["grid"],
+                                    range=[math.log10(Pt.max()) - 5, math.log10(Pt.max()) + 0.3]))
+        c1.plotly_chart(tu, width="stretch", config={"displaylogo": False})
     except Exception as exc:
-        c1.warning(f"Spettro del tubo non disponibile: {exc}")
+        c1.warning(t("warn_tube", exc=exc))
 
     cdf = pd.DataFrame({"El": list(sim["comp"]), "w": list(sim["comp"].values())})
     b = go.Figure(go.Bar(x=cdf["El"], y=cdf["w"] * 1e6, marker=dict(color=np.log10(cdf["w"].clip(lower=1e-12)), colorscale="Tealrose"),
                          hovertemplate="%{x}: %{y:.4g} ppm<extra></extra>"))
     b.update_layout(**PLOT_BG, height=360, margin=dict(l=60, r=10, t=40, b=40),
-                    title=dict(text=f"Composizione normalizzata · {P['sample']}", font=dict(size=13)),
-                    yaxis=dict(title="ppm (massa)", type="log", gridcolor=C["grid"]))
+                    title=dict(text=t("title_comp", sample=P["sample"]), font=dict(size=13)),
+                    yaxis=dict(title=t("axis_ppm_mass"), type="log", gridcolor=C["grid"]))
     c2.plotly_chart(b, width="stretch", config={"displaylogo": False})
 
-    with st.expander("🧾 Config usata (YAML) e log del pipeline"):
+    with st.expander(t("exp_config_log")):
         st.code(cfg_text, language="yaml")
-        st.code(sim["log"] or "(nessun output: risultato dalla cache)", language="text")
+        st.code(sim["log"] or t("log_cache"), language="text")
 
 # ── TAB NOTE ────────────────────────────────────────────────────────────────
 with tab_notes:
-    st.markdown(f"""
-#### Cosa fa il pacchetto `xrf_model` e cosa aggiunge l'app
-- **Fisica (`xrf_model`, invariato):** fluorescenza K primaria (Sherman/Shiraiwa–Fujino) e secondaria,
-  righe L con Coster–Kronig e cascata K→L, Rayleigh con f0+f′, Compton Klein–Nishina × S con allargamento
-  Doppler, assorbimento in aria, finestra Be ed efficienza del Si, risoluzione Fano + rumore. Tubo da SpekPy.
-- **App:** la simulazione gira a 1 µA e viene scalata alla corrente scelta (il modello è lineare nella corrente:
-  niente dead time né pile-up). I picchi gaussiani sono integrati analiticamente sui canali MCA di destinazione;
-  il continuo è ridistribuito con un'interpolazione monotona della cumulata (totale conservato). Il **rumore di
-  Poisson** è campionato sui canali finali (`numpy.random.default_rng(seed).poisson`). P/B, LLD e dead time sono stime.
-
-#### Limiti noti
-1. **Argon non modellato.** L'aria assorbe ma non emette né diffonde: la riga Ar K (2.96 keV) e lo scattering
-   dell'aria mancano, quindi la zona 2.8–3.4 keV non è confrontabile con una misura in aria.
-2. **Nessun modello di footprint.** La griglia (±0.4 cm in config) è trattata come area illuminata uniformemente.
-   Con un collimatore le intensità assolute sono sovrastimate; «Area illuminata → da collimatore» usa la formula
-   di `lab_xrf.yml` (½x = 0.443·D/cosθ, ½y = 0.443·D).
-3. **Target Ag:** config 1.0 µm, scheda/manuale Amptek 0.75 ± 0.1 µm. Con 0.75 µm le righe calano del ~21–25 %.
-4. **Si attivo:** default dell'app 500 µm (offerta ORTEC e manuale X-123); `lab_xrf.yml` ha {cfg_si:g} µm.
-5. **Matrice di risposta Geant4 non inclusa nel repository:** senza `.npz` i picchi sono gaussiani puri, senza escape
-   (1.74 keV sotto ogni picco), coda e shelf. Anche il file di calibrazione MCA (`.calib`) non è nel repository.
-6. **Inizio griglia a {sim['E'][0]:.3f} keV** (SpekPy): mancano solo le righe sotto ~1 keV (O, C, …). Na Kα (1.04 keV)
-   è al limite della griglia; Mg Kα (1.25 keV) c'è, ma in aria è fortemente assorbita.
-7. **Dead time** stimato con modello paralizzabile, τ = (τ/Tpeak) × Tpeak; il peaking time di default (4.8 µs) è una
-   STIMA. Il `.mca` esportato ha REAL_TIME = LIVE_TIME/(1 − DT). Pile-up e somme non modellati.
-8. **Geometria:** in modalità parametrica è nel piano x–z con il rivelatore puntato sullo spot (`det_normal = −r_det`);
-   in modalità config si usano i vettori di `lab_xrf.yml` così come sono.
-9. **Etichette Ag K** (Rayleigh e Compton) mostrate solo sopra il bordo K dell'Ag ({core.AG_K_EDGE_keV} keV).
-
-#### Unità
-- Tabella righe: *ingresso rivelatore* = ph/s che arrivano al rivelatore (geometria + aria), *rivelati* = × T_Be × QE_Si.
-- Concentrazioni: frazioni in massa normalizzate a somma 1.
-- Spettro: ph/s/keV (densità) oppure conteggi per canale nel live time scelto.
-""")
+    st.markdown(t("notes_md", cfg_si=cfg_si, e_min=sim["E"][0], ag_edge=core.AG_K_EDGE_keV))
